@@ -19,6 +19,10 @@
     <div class="eyebrow">Listener</div>
     <h1>Listen</h1>
 
+    <div id="gate" hidden>
+      <p class="sub">This broadcast is private. Open the invite link (or scan the QR) you were given to listen.</p>
+    </div>
+
     <div class="btn-row"><button class="btn-listen" id="go">Tap to listen</button></div>
 
     <div class="status">
@@ -158,11 +162,10 @@
     }
 
     // --- Status stream -------------------------------------------------
-    openStatusSocket("listener", (m) => {
+    function onStatus(m) {
       if (m.type === "caption") { showCaption(m.text, m.final); return; }
       if (m.type !== "status") return;
       countEl.textContent = `${m.listeners} listening`;
-      const wasLive = live;
       live = m.live;
 
       if (!live) { if (playing || starting) stopPlayback(); else render(); return; }
@@ -173,7 +176,7 @@
 
       if (wantAudio && !playing && !starting) startPlayback();
       else render();
-    });
+    }
 
     // --- Tap to listen -------------------------------------------------
     goBtn.onclick = () => {
@@ -184,8 +187,27 @@
       else render();
     };
 
-    render();
-    window.addEventListener("pagehide", () => { wantAudio = false; stopPlayback(); });
+    // --- Access gate (secret link) -------------------------------------
+    // If listening requires a key, the invite link carries ?k=<key>; we store
+    // it as a cookie so hls.js + native HLS requests to /hls/* are authorized.
+    const urlKey = new URLSearchParams(location.search).get("k");
+    if (urlKey) document.cookie = "aw_key=" + encodeURIComponent(urlKey) + "; path=/; max-age=1209600; samesite=lax";
+    const hasKey = () => !!urlKey || /(?:^|;\s*)aw_key=/.test(document.cookie);
+
+    function showPrivate() {
+      document.getElementById("gate").hidden = false;
+      document.querySelector(".btn-row").hidden = true;
+      document.querySelector(".status").hidden = true;
+    }
+
+    (async () => {
+      let keyRequired = false;
+      try { keyRequired = (await (await fetch("/api/config")).json()).keyRequired; } catch {}
+      if (keyRequired && !hasKey()) { showPrivate(); return; }
+      render();
+      openStatusSocket("listener", onStatus);
+      window.addEventListener("pagehide", () => { wantAudio = false; stopPlayback(); });
+    })();
   </script>
 </body>
 </html>

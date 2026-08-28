@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="app.css" />
+<script src="vendor/qrcode.js"></script>
 </head>
 <body>
   <div class="card">
@@ -51,6 +52,16 @@
 
       <div class="err" id="err"></div>
       <div class="note" id="ccStatus"></div>
+
+      <section id="share" hidden>
+        <label>Listener link — scan or share</label>
+        <div class="qr" id="qr"></div>
+        <div class="sharelink">
+          <input id="listenUrl" readonly />
+          <button type="button" id="copyBtn">Copy</button>
+        </div>
+      </section>
+
       <div class="note">Listeners hear you a few seconds behind (HLS). Keep this tab open while broadcasting. <a href="/recordings" style="color:var(--muted)">Recordings →</a></div>
     </section>
   </div>
@@ -73,7 +84,7 @@
     const errEl = document.getElementById("err");
     const levelBar = document.getElementById("level");
 
-    let ws = null, password = "", live = false;
+    let ws = null, password = "", live = false, listenLink = "/listen";
     let stream = null, recorder = null, audioCtx = null;
 
     // --- Broadcaster ingest socket (auth + audio) ----------------------
@@ -85,11 +96,37 @@
         sock.addEventListener("open", () => sock.send(JSON.stringify({ type: "auth", password: pw })));
         sock.addEventListener("message", (e) => {
           let m; try { m = JSON.parse(e.data); } catch { return; }
-          if (m.type === "auth") resolve(m.ok ? sock : (sock.close(), null));
+          if (m.type === "auth") {
+            if (m.ok) { listenLink = m.listen || "/listen"; resolve(sock); }
+            else { sock.close(); resolve(null); }
+          }
         });
         sock.addEventListener("error", () => resolve(null));
         sock.addEventListener("close", () => { if (live) stop(); });
       });
+    }
+
+    // Render the listener link + QR once logged in.
+    function showShareLink() {
+      const url = location.origin + listenLink;
+      document.getElementById("listenUrl").value = url;
+      try {
+        const qr = qrcode(0, "M"); qr.addData(url); qr.make();
+        document.getElementById("qr").innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+      } catch {}
+      document.getElementById("share").hidden = false;
+    }
+    document.getElementById("copyBtn").onclick = async () => {
+      const el = document.getElementById("listenUrl");
+      try { await navigator.clipboard.writeText(el.value); }
+      catch { el.select(); document.execCommand("copy"); }
+      document.getElementById("copyBtn").textContent = "Copied";
+      setTimeout(() => (document.getElementById("copyBtn").textContent = "Copy"), 1500);
+    };
+    // Store the current key as a cookie so the broadcaster's own status socket passes the gate.
+    function applyKeyCookie() {
+      const k = new URLSearchParams((listenLink.split("?")[1] || "")).get("k");
+      if (k) document.cookie = "aw_key=" + encodeURIComponent(k) + "; path=/; max-age=1209600; samesite=lax";
     }
 
     // --- Login ---------------------------------------------------------
@@ -99,6 +136,8 @@
       password = pw;
       loginSec.hidden = true;
       controls.hidden = false;
+      applyKeyCookie();
+      showShareLink();
       refreshMics();
       // Listener count for the broadcaster's own view.
       openStatusSocket("broadcaster", (m) => {

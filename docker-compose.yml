@@ -4,9 +4,14 @@ services:
     environment:
       # Password the broadcaster must enter to go live.
       BROADCAST_PASSWORD: ${BROADCAST_PASSWORD:-change-me}
+      # Listener access key (empty = public; set = /listen?k=<key> required).
+      LISTEN_KEY: ${LISTEN_KEY:-}
       PORT: "8080"
     ports:
       - "8080:8080"
+    volumes:
+      # Persist recordings across redeploys.
+      - ./recordings:/app/recordings
     restart: unless-stopped
 
   # Named Cloudflare tunnel (stable URL on your own domain).

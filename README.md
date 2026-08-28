@@ -20,6 +20,8 @@ Built to run anywhere Docker runs, exposed over HTTPS with a Cloudflare tunnel �
 - 💬 **Free live captions** (broadcaster's browser, relayed to listeners).
 - 🔒 **Password-gated, unlisted broadcasting** — the talk page is reachable by
   direct URL only and requires a password (enforced server-side).
+- 🔑 **Optional private listening** — a secret-link key (set in `.env`) gates the
+  audio itself (`/listen?k=…`), with a **QR code** on the broadcaster page.
 - ☁️ **No public IP** — runs behind a Cloudflare quick or named tunnel.
 
 ---
@@ -105,6 +107,23 @@ The broadcaster captures any OS audio **input device**:
 
 ---
 
+## Private listening (secret link)
+
+By default anyone with the link can listen. To make it private, set `LISTEN_KEY`
+in `.env` to any random string, then `docker compose up -d`:
+
+- The listener link becomes **`/listen?k=<key>`**, and the **audio endpoints
+  (`/hls/*`) and the status/caption feed are gated** by it — not just the page.
+  The key is stored as a cookie so hls.js and native iOS playback stay authorized.
+- The broadcaster page shows the keyed link **and a QR code** to scan/share.
+- **`.env` is the single source of truth.** To rotate/revoke, change `LISTEN_KEY`
+  and redeploy — all old links/QRs stop working.
+- Leave `LISTEN_KEY` empty for a fully public broadcast (no key anywhere).
+
+> This is an unguessable, revocable link — frictionless for QR/scan-to-listen —
+> but a shared link can be forwarded. For per-person access control, put
+> **Cloudflare Access** in front of the tunnel instead.
+
 ## Recording
 
 Opt-in per session: the broadcaster ticks **"Record this broadcast"** before going
@@ -148,9 +167,13 @@ All via environment variables (see [.env.example](.env.example)):
 | Variable | Default | Purpose |
 |---|---|---|
 | `BROADCAST_PASSWORD` | `change-me` | Password required to go live. |
+| `LISTEN_KEY` | *(empty)* | Listener access key; empty = public. Change it and redeploy to rotate/revoke. |
 | `TUNNEL_TOKEN` | *(empty)* | Cloudflare named-tunnel token. |
 | `RECORD` | `1` | Master switch for the recording feature (`0` disables). |
 | `PORT` | `8080` | App listen port. |
+
+The `recordings/` MP3 archive is persisted to the host via a volume (see
+[docker-compose.yml](docker-compose.yml)).
 
 ---
 

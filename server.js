@@ -18,12 +18,33 @@ const http = require("http");
 const PORT = Number(process.env.PORT || 8080);
 const PASSWORD = process.env.BROADCAST_PASSWORD || "change-me";
 const RECORD = process.env.RECORD !== "0"; // set RECORD=0 to disable session recordings
+
 const HLS_DIR = path.join(__dirname, "hls");
 const REC_DIR = path.join(__dirname, "recordings");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 fs.mkdirSync(HLS_DIR, { recursive: true });
 fs.mkdirSync(REC_DIR, { recursive: true });
+
+// Listener access key — single source of truth is the LISTEN_KEY env var.
+// Empty = public. To change it, edit .env and redeploy.
+const LISTEN_KEY = process.env.LISTEN_KEY || "";
+
+function cookieVal(header, name) {
+  const m = (header || "").match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : "";
+}
+// True if the request carries the listen key (cookie or ?k=), or if none is required.
+function hasListenKey(req) {
+  if (!LISTEN_KEY) return true;
+  const url = new URL(req.url, "http://localhost");
+  return url.searchParams.get("k") === LISTEN_KEY ||
+         cookieVal(req.headers.cookie, "aw_key") === LISTEN_KEY;
+}
+function listenPath() {
+  return LISTEN_KEY ? "/listen?k=" + encodeURIComponent(LISTEN_KEY) : "/listen";
+}
+
 cleanHls();
 
 function stamp() {
@@ -34,6 +55,14 @@ function stamp() {
 
 // --- HTTP: static pages + HLS output -----------------------------------
 const app = express();
+// Public config for the listener page.
+app.get("/api/config", (_req, res) => res.json({ keyRequired: !!LISTEN_KEY }));
+
+// Gate the actual audio, not just the page.
+app.use("/hls", (req, res, next) => {
+  if (hasListenKey(req)) return next();
+  res.status(403).end("Forbidden");
+});
 app.use("/hls", express.static(HLS_DIR, {
   setHeaders(res, p) {
     if (p.endsWith(".m3u8")) res.setHeader("Cache-Control", "no-cache, no-store");
@@ -152,6 +181,8 @@ server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url, "http://localhost");
   const { pathname } = url;
   if (pathname === "/ws/broadcast" || pathname === "/ws/status") {
+    // The status feed (live state, count, captions) is gated like the audio.
+    if (pathname === "/ws/status" && !hasListenKey(req)) { socket.destroy(); return; }
     const role = url.searchParams.get("role") === "broadcaster" ? "broadcaster" : "listener";
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, pathname, role));
   } else {
@@ -197,7 +228,7 @@ wss.on("connection", (ws, pathname, role) => {
       }
       authed = true;
       broadcaster = ws;
-      try { ws.send(JSON.stringify({ type: "auth", ok: true })); } catch {}
+      try { ws.send(JSON.stringify({ type: "auth", ok: true, listen: listenPath() })); } catch {}
       return;
     }
 
