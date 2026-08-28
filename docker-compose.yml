@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    environment:
+      # Password the broadcaster must enter to go live.
+      BROADCAST_PASSWORD: ${BROADCAST_PASSWORD:-change-me}
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # Named Cloudflare tunnel (stable URL on your own domain).
+  # 1. In the Cloudflare Zero Trust dashboard: Networks -> Tunnels -> Create a
+  #    tunnel -> copy the token into TUNNEL_TOKEN in .env
+  # 2. Add a Public Hostname on that tunnel: your hostname -> Service
+  #    http://app:8080  (that's this compose network's app service)
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}   # set in .env before starting the tunnel service
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # --- Alternative: no domain / no token needed (random temporary URL) --------
+  # Replace the `tunnel` service above with this to get a *.trycloudflare.com URL:
+  #
+  #   tunnel:
+  #     image: cloudflare/cloudflared:latest
+  #     command: tunnel --no-autoupdate --url http://app:8080
+  #     depends_on: [app]
+  #     restart: unless-stopped
+  #
+  # The URL is printed in `docker compose logs tunnel`.

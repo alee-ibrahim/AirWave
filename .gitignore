@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+
+# secrets & local config
+.env
+.dev.vars
+
+# generated / runtime
+hls/
+recordings/
+.wrangler/
+dist/
+*.log
+
+# local tools & OS files
+.tools/
+.DS_Store
+Thumbs.db

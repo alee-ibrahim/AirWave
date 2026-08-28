@@ -1,0 +1,14 @@
+{
+  "name": "airwave",
+  "version": "1.0.0",
+  "description": "AirWave — one-way live audio broadcast (HLS): one person talks, all phones listen, even in the background.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

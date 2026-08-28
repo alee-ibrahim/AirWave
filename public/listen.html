@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AirWave · Listen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="app.css" />
+<script src="vendor/hls.min.js"></script>
+</head>
+<body>
+  <div class="card">
+    <a class="back" href="/">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      Back
+    </a>
+    <div class="eyebrow">Listener</div>
+    <h1>Listen</h1>
+
+    <div class="btn-row"><button class="btn-listen" id="go">Tap to listen</button></div>
+
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="stateText">Waiting for broadcast…</span>
+      <span class="count" id="count">0 listening</span>
+    </div>
+
+    <button class="cc-toggle" id="ccToggle" hidden>CC</button>
+    <div class="caption" id="caption" hidden></div>
+
+    <div class="err" id="err"></div>
+    <div class="note" id="hint" hidden>Audio keeps playing with the screen off or while you use other apps.</div>
+    <audio id="player" autoplay playsinline></audio>
+  </div>
+
+  <script type="module">
+    import { openStatusSocket } from "./util.js";
+
+    const HLS_URL = "/hls/index.m3u8";
+    const goBtn = document.getElementById("go");
+    const dot = document.getElementById("dot");
+    const stateText = document.getElementById("stateText");
+    const countEl = document.getElementById("count");
+    const errEl = document.getElementById("err");
+    const hint = document.getElementById("hint");
+    const player = document.getElementById("player");
+
+    let live = false, epoch = null, wantAudio = false;
+    let playing = false, starting = false;
+    let hls = null, retryTimer = null;
+
+    const nativeHls = player.canPlayType("application/vnd.apple.mpegurl") !== "";
+
+    function render() {
+      hint.hidden = !(playing || starting || wantAudio);
+      if (playing) {
+        dot.className = "dot on"; stateText.textContent = "Live — you're listening"; goBtn.textContent = "Stop listening";
+      } else if (starting) {
+        dot.className = "dot on"; stateText.textContent = "Connecting…"; goBtn.textContent = "Cancel";
+      } else if (wantAudio) {
+        dot.className = "dot live"; stateText.textContent = "Ready — you'll hear it the moment it starts"; goBtn.textContent = "Cancel";
+      } else if (live) {
+        dot.className = "dot live"; stateText.textContent = "Broadcast is live"; goBtn.textContent = "Tap to listen";
+      } else {
+        dot.className = "dot"; stateText.textContent = "No broadcast right now"; goBtn.textContent = "Tap to listen";
+      }
+    }
+
+    function mediaSession() {
+      if (!("mediaSession" in navigator)) return;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: "Live broadcast" });
+        navigator.mediaSession.setActionHandler("pause", () => { wantAudio = false; stopPlayback(); });
+        navigator.mediaSession.setActionHandler("play", () => { if (!playing && !starting) goBtn.onclick(); });
+      } catch {}
+    }
+
+    // Confirm actual playback via media events, not the play() promise
+    // (browsers resolve play() before media truly starts).
+    player.addEventListener("playing", () => {
+      if (starting || wantAudio) { starting = false; playing = true; render(); }
+    });
+    player.addEventListener("error", () => { if (wantAudio && live) retryLater(); });
+
+    // --- HLS playback --------------------------------------------------
+    // Prefer hls.js everywhere it works (handles live stream resets cleanly);
+    // fall back to the browser's native HLS only where hls.js can't run (iOS Safari).
+    function startPlayback() {
+      if (playing || starting) return;
+      starting = true; errEl.textContent = ""; render();
+
+      if (window.Hls && Hls.isSupported()) {
+        hls = new Hls({
+          // Continuity-first, self-adapting latency:
+          liveSyncDuration: 1.2,          // good network → ~1.2s behind the edge
+          liveMaxLatencyDuration: 45,     // tolerate falling far behind (never hard-skip → never miss)
+          maxLiveSyncPlaybackRate: 1.2,   // gently speed up to catch back toward the edge
+          backBufferLength: 30,
+          manifestLoadingMaxRetry: 10,
+        });
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(HLS_URL));
+        hls.on(Hls.Events.MANIFEST_PARSED, () => player.play().catch(() => {}));
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (!data.fatal) return;
+          if (live && (wantAudio || playing)) retryLater();
+          else stopPlayback();
+        });
+        hls.attachMedia(player);
+      } else if (nativeHls) {
+        player.src = HLS_URL;
+        player.play().catch(() => {});
+      } else {
+        errEl.textContent = "This browser can't play HLS.";
+        starting = false; render();
+      }
+      mediaSession();
+    }
+
+    function retryLater() {
+      teardownHls();
+      playing = false;
+      if (!wantAudio || !live) { starting = false; render(); return; }
+      starting = true; render();
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { starting = false; if (wantAudio && live && !playing) startPlayback(); }, 1500);
+    }
+
+    function teardownHls() {
+      clearTimeout(retryTimer); retryTimer = null;
+      if (hls) { try { hls.destroy(); } catch {} hls = null; }
+      try { player.pause(); } catch {}
+      try { player.removeAttribute("src"); player.load(); } catch {}
+    }
+
+    function stopPlayback() {
+      teardownHls();
+      playing = false; starting = false;
+      render();
+    }
+
+    // --- Captions ------------------------------------------------------
+    const ccToggle = document.getElementById("ccToggle");
+    const captionEl = document.getElementById("caption");
+    let captionsOn = true, sawCaption = false;
+    ccToggle.onclick = () => {
+      captionsOn = !captionsOn;
+      ccToggle.classList.toggle("on", captionsOn);
+      captionEl.hidden = !captionsOn;
+    };
+    function showCaption(text, final) {
+      if (!sawCaption) { sawCaption = true; ccToggle.hidden = false; ccToggle.classList.add("on"); }
+      if (!captionsOn) return;
+      captionEl.hidden = false;
+      captionEl.textContent = text;
+      captionEl.classList.toggle("interim", !final);
+    }
+
+    // --- Status stream -------------------------------------------------
+    openStatusSocket("listener", (m) => {
+      if (m.type === "caption") { showCaption(m.text, m.final); return; }
+      if (m.type !== "status") return;
+      countEl.textContent = `${m.listeners} listening`;
+      const wasLive = live;
+      live = m.live;
+
+      if (!live) { if (playing || starting) stopPlayback(); else render(); return; }
+
+      // New epoch = broadcaster restarted → reload the fresh stream.
+      if ((playing || starting) && epoch != null && m.epoch !== epoch) { stopPlayback(); }
+      epoch = m.epoch;
+
+      if (wantAudio && !playing && !starting) startPlayback();
+      else render();
+    });
+
+    // --- Tap to listen -------------------------------------------------
+    goBtn.onclick = () => {
+      if (playing || starting || wantAudio) { wantAudio = false; stopPlayback(); return; }
+      wantAudio = true;
+      try { player.play().catch(() => {}); } catch {} // unlock audio within the gesture
+      if (live) startPlayback();
+      else render();
+    };
+
+    render();
+    window.addEventListener("pagehide", () => { wantAudio = false; stopPlayback(); });
+  </script>
+</body>
+</html>

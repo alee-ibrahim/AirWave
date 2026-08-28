@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AirWave · Recordings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="card">
+    <a class="back" href="/">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      Back
+    </a>
+    <div class="eyebrow">Archive</div>
+    <h1>Recordings</h1>
+
+    <div id="list" class="rec-list"><p class="note">Loading…</p></div>
+  </div>
+
+  <script type="module">
+    const list = document.getElementById("list");
+    const fmtSize = (b) => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+    const fmtName = (n) => n.replace(/^broadcast_/, "").replace(/\.mp3$/, "").replace("_", " · ").replace(/-/g, (m, i) => i < 10 ? "-" : ":");
+
+    async function load() {
+      let data;
+      try { data = await (await fetch("/api/recordings")).json(); }
+      catch { list.innerHTML = '<p class="err">Couldn\'t load recordings.</p>'; return; }
+      const files = data.files || [];
+      if (!files.length) {
+        list.innerHTML = '<p class="note">No recordings yet. A recording is saved when the broadcaster ticks “Record this broadcast”.</p>';
+        return;
+      }
+      list.innerHTML = "";
+      for (const f of files) {
+        const row = document.createElement("a");
+        row.className = "rec-row";
+        row.href = "/rec/" + encodeURIComponent(f.name);
+        row.setAttribute("download", f.name);
+        row.innerHTML = `<span class="rec-name">${fmtName(f.name)}</span><span class="rec-size">${fmtSize(f.size)} ↓</span>`;
+        list.appendChild(row);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

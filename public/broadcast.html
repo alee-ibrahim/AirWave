@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AirWave · Broadcast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="card">
+    <a class="back" href="/">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      Back
+    </a>
+    <div class="eyebrow">Broadcaster</div>
+    <h1>Talk</h1>
+
+    <!-- Login gate -->
+    <section id="login">
+      <div class="field">
+        <label for="pw">Broadcaster password</label>
+        <input id="pw" type="password" autocomplete="current-password" placeholder="Enter password" />
+      </div>
+      <button class="btn-primary" id="loginBtn">Unlock</button>
+      <div class="err" id="loginErr"></div>
+    </section>
+
+    <!-- Broadcast controls -->
+    <section id="controls" hidden>
+      <div class="field">
+        <label for="mic">Microphone</label>
+        <select id="mic"></select>
+      </div>
+
+      <label class="check"><input type="checkbox" id="lineChk" /> Line input (mixer / Dante — no mic processing)</label>
+      <label class="check"><input type="checkbox" id="recordChk" /> Record this broadcast</label>
+      <label class="check"><input type="checkbox" id="ccChk" /> Live captions (English, beta)</label>
+
+      <div class="meter"><i id="level"></i></div>
+
+      <div class="btn-row"><button class="btn-primary" id="go">Go live</button></div>
+
+      <div class="status">
+        <span class="dot" id="dot"></span>
+        <span id="stateText">Off air</span>
+        <span class="count" id="count">0 listening</span>
+      </div>
+
+      <div class="err" id="err"></div>
+      <div class="note" id="ccStatus"></div>
+      <div class="note">Listeners hear you a few seconds behind (HLS). Keep this tab open while broadcasting. <a href="/recordings" style="color:var(--muted)">Recordings →</a></div>
+    </section>
+  </div>
+
+  <script type="module">
+    import { openStatusSocket, listDevices, fillDeviceSelect, pickAudioMime } from "./util.js";
+
+    const PW_KEY = "broadcastPassword";
+    const loginSec = document.getElementById("login");
+    const controls = document.getElementById("controls");
+    const pwInput = document.getElementById("pw");
+    const loginBtn = document.getElementById("loginBtn");
+    const loginErr = document.getElementById("loginErr");
+
+    const micSel = document.getElementById("mic");
+    const goBtn = document.getElementById("go");
+    const dot = document.getElementById("dot");
+    const stateText = document.getElementById("stateText");
+    const countEl = document.getElementById("count");
+    const errEl = document.getElementById("err");
+    const levelBar = document.getElementById("level");
+
+    let ws = null, password = "", live = false;
+    let stream = null, recorder = null, audioCtx = null;
+
+    // --- Broadcaster ingest socket (auth + audio) ----------------------
+    function openIngest(pw) {
+      return new Promise((resolve) => {
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const sock = new WebSocket(`${proto}://${location.host}/ws/broadcast`);
+        sock.binaryType = "arraybuffer";
+        sock.addEventListener("open", () => sock.send(JSON.stringify({ type: "auth", password: pw })));
+        sock.addEventListener("message", (e) => {
+          let m; try { m = JSON.parse(e.data); } catch { return; }
+          if (m.type === "auth") resolve(m.ok ? sock : (sock.close(), null));
+        });
+        sock.addEventListener("error", () => resolve(null));
+        sock.addEventListener("close", () => { if (live) stop(); });
+      });
+    }
+
+    // --- Login ---------------------------------------------------------
+    async function unlock(pw) {
+      ws = await openIngest(pw);
+      if (!ws) return false;
+      password = pw;
+      loginSec.hidden = true;
+      controls.hidden = false;
+      refreshMics();
+      // Listener count for the broadcaster's own view.
+      openStatusSocket("broadcaster", (m) => {
+        if (m.type === "status") countEl.textContent = `${m.listeners} listening`;
+      });
+      return true;
+    }
+
+    loginBtn.onclick = async () => {
+      loginErr.textContent = "";
+      loginBtn.disabled = true;
+      try {
+        if (await unlock(pwInput.value)) sessionStorage.setItem(PW_KEY, pwInput.value);
+        else loginErr.textContent = "Wrong password (or someone is already broadcasting).";
+      } catch (e) { loginErr.textContent = e.message; }
+      finally { loginBtn.disabled = false; }
+    };
+    pwInput.addEventListener("keydown", (e) => { if (e.key === "Enter") loginBtn.click(); });
+    (async () => { const s = sessionStorage.getItem(PW_KEY); if (s) await unlock(s); })();
+
+    // --- Devices -------------------------------------------------------
+    async function refreshMics() {
+      try { fillDeviceSelect(micSel, await listDevices("audioinput"), "Microphone"); } catch {}
+    }
+    navigator.mediaDevices.addEventListener?.("devicechange", refreshMics);
+
+    // --- Level meter ---------------------------------------------------
+    function meter(track) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      const buf = new Uint8Array(analyser.frequencyBinCount);
+      (function tick() {
+        if (!live) return;
+        analyser.getByteTimeDomainData(buf);
+        let peak = 0;
+        for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
+        levelBar.style.width = Math.min(100, (peak / 128) * 140) + "%";
+        requestAnimationFrame(tick);
+      })();
+    }
+
+    // --- Live captions (free, via the browser's Web Speech API) --------
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const ccStatus = document.getElementById("ccStatus");
+    let recognition = null, ccActive = false;
+    function startCaptions() {
+      if (!document.getElementById("ccChk").checked) return;
+      if (!SR) { ccStatus.textContent = "Captions: not supported in this browser — use Chrome or Edge."; return; }
+      try {
+        recognition = new SR();
+        recognition.lang = "en-US";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.onstart = () => { ccStatus.textContent = "Captions: listening…"; };
+        recognition.onresult = (e) => {
+          let interim = "", final = "";
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) final += t; else interim += t;
+          }
+          const text = (final || interim).trim();
+          if (text) ccStatus.textContent = "Captions ✓ " + text.slice(-60);
+          if (final && ws?.readyState === 1) ws.send(JSON.stringify({ type: "caption", text: final.trim(), final: true }));
+          else if (interim && ws?.readyState === 1) ws.send(JSON.stringify({ type: "caption", text: interim.trim(), final: false }));
+        };
+        recognition.onerror = (e) => {
+          ccStatus.textContent = "Captions error: " + e.error +
+            (e.error === "not-allowed" || e.error === "service-not-allowed" ? " (allow microphone / try Chrome)" :
+             e.error === "no-speech" ? " (no speech detected)" : "");
+        };
+        recognition.onend = () => { if (ccActive) { try { recognition.start(); } catch {} } };
+        ccActive = true;
+        recognition.start();
+      } catch (err) { ccStatus.textContent = "Captions couldn't start: " + err.message; }
+    }
+    function stopCaptions() {
+      ccActive = false;
+      try { recognition && recognition.stop(); } catch {}
+      recognition = null;
+      ccStatus.textContent = "";
+    }
+
+    // --- Go live / stop ------------------------------------------------
+    async function goLive() {
+      errEl.textContent = "";
+      goBtn.disabled = true;
+      try {
+        const mime = pickAudioMime();
+        if (!mime) throw new Error("This browser can't record audio (MediaRecorder unsupported).");
+        const lineInput = document.getElementById("lineChk").checked;
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: micSel.value ? { exact: micSel.value } : undefined,
+            // Line/Dante feed: keep the mix untouched. Mic mode: clean up voice.
+            echoCancellation: !lineInput,
+            noiseSuppression: !lineInput,
+            autoGainControl: !lineInput,
+            channelCount: lineInput ? 2 : undefined,
+          },
+        });
+        await refreshMics();
+
+        ws.send(JSON.stringify({ type: "start", record: document.getElementById("recordChk").checked }));
+        startCaptions();
+        recorder = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: lineInput ? 192000 : 128000 });
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size && ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+        };
+        recorder.start(250); // emit a chunk every 250ms
+
+        live = true;
+        dot.className = "dot live";
+        stateText.textContent = "On air";
+        goBtn.textContent = "Stop";
+        goBtn.classList.add("live");
+        goBtn.disabled = false;
+        meter(stream.getAudioTracks()[0]);
+      } catch (e) {
+        errEl.textContent = e.message; stop();
+      }
+    }
+
+    function stop() {
+      live = false;
+      stopCaptions();
+      try { recorder && recorder.state !== "inactive" && recorder.stop(); } catch {}
+      try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "stop" })); } catch {}
+      try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
+      try { audioCtx?.close(); } catch {}
+      recorder = stream = audioCtx = null;
+      dot.className = "dot";
+      stateText.textContent = "Off air";
+      levelBar.style.width = "0%";
+      goBtn.textContent = "Go live";
+      goBtn.classList.remove("live");
+      goBtn.disabled = false;
+    }
+
+    goBtn.onclick = () => (live ? stop() : goLive());
+    window.addEventListener("pagehide", () => { stop(); try { ws?.close(); } catch {} });
+  </script>
+</body>
+</html>
