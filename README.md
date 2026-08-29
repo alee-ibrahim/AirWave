@@ -53,24 +53,36 @@ Media never round-trips through a third-party SFU; the tunnel only carries HTTP.
 
 ## Quick start
 
-Requires **Docker** (the image bundles ffmpeg).
+Requires **Docker** (the image bundles ffmpeg). The toolchain and tasks are
+managed with **[mise](https://mise.jdx.dev)** (Node + pnpm).
 
 ```bash
 cp .env.example .env      # set BROADCAST_PASSWORD (and TUNNEL_TOKEN if using a named tunnel)
-docker compose up -d --build
+mise trust                # trust mise.toml (first time only; mise also prompts)
+mise install              # installs Node + pnpm (pinned in mise.toml)
+mise run up               # docker compose up -d --build  (app + tunnel)
 ```
+
+Install mise from <https://mise.jdx.dev> (macOS/Linux: `curl https://mise.run | sh`;
+Windows: `winget install jdx.mise`, `scoop install mise`, or the release binary).
 
 - **Listeners:** open `/listen`
 - **Broadcaster:** open `/broadcast` (direct URL), enter the password, pick an
   input, and click **Go live**.
 
-### Local only
+### Tasks (`mise run <task>`)
 
-The app listens on `http://localhost:8080`. To run just the app without a tunnel:
+| Task | Does |
+|---|---|
+| `install` | `pnpm install` (deps go to pnpm's shared global store) |
+| `up` | build + start app **and** tunnel in Docker |
+| `app` | build + start just the app (no tunnel) — `http://localhost:8080` |
+| `down` | stop and remove containers |
+| `restart` / `logs` | restart the app / follow its logs |
+| `tunnel` | print the current quick-tunnel URL |
 
-```bash
-docker compose up -d --build app
-```
+Not using mise? The tasks are thin wrappers — e.g. `docker compose up -d --build`
+does the same as `mise run up`, and `pnpm install` for deps.
 
 ---
 
@@ -181,7 +193,8 @@ The `recordings/` MP3 archive is persisted to the host via a volume (see
 
 ```
 server.js              Node + ffmpeg server (ingest, HLS, recording, status)
-Dockerfile             Node 20 + ffmpeg image
+mise.toml              toolchain (Node + pnpm) and tasks
+Dockerfile             Node 20 + ffmpeg image (deps via pnpm)
 docker-compose.yml     app + Cloudflare tunnel services
 public/
   index.html           landing page
@@ -191,6 +204,7 @@ public/
   util.js              shared client helpers
   app.css              styles
   vendor/hls.min.js    hls.js (bundled locally)
+  vendor/qrcode.js     QR generator (bundled locally)
 ```
 
 Generated at runtime and git-ignored: `hls/`, `recordings/`, `node_modules/`, `.env`.

@@ -1,0 +1,38 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+# mise manages the toolchain (Node + pnpm) and the project tasks.
+# Install mise (https://mise.jdx.dev), then:  mise install  &&  mise run up
+[tools]
+node = "20"
+pnpm = "10"
+
+[tasks.install]
+description = "Install dependencies (pnpm — shared global store)"
+run = "pnpm install"
+
+[tasks.up]
+description = "Build and start everything in Docker (app + tunnel)"
+run = "docker compose up -d --build"
+
+[tasks.app]
+description = "Build and start just the app (no tunnel)"
+run = "docker compose up -d --build app"
+
+[tasks.down]
+description = "Stop and remove containers"
+run = "docker compose down"
+
+[tasks.restart]
+description = "Restart the app container"
+run = "docker compose restart app"
+
+[tasks.logs]
+description = "Follow the app logs"
+run = "docker compose logs -f app"
+
+[tasks.tunnel]
+description = "Print the current quick-tunnel URL"
+run = "docker compose logs tunnel | grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' | tail -1"
+
+[tasks.start]
+description = "Run the server locally (requires ffmpeg on PATH; Docker is preferred)"
+run = "node server.js"
