@@ -194,7 +194,7 @@ The `recordings/` MP3 archive is persisted to the host via a volume (see
 ```
 server.js              Node + ffmpeg server (ingest, HLS, recording, status)
 mise.toml              toolchain (Node + pnpm) and tasks
-Dockerfile             Node 22 + ffmpeg image (deps via pnpm)
+Dockerfile             Node 26 + ffmpeg image (deps via pnpm)
 docker-compose.yml     app + Cloudflare tunnel services
 public/
   index.html           landing page

@@ -1,4 +1,4 @@
-FROM node:22.23.2-bookworm-slim
+FROM node:26.8.1-bookworm-slim
 
 # ffmpeg does the WebM/Opus -> HLS/AAC muxing.
 RUN apt-get update \
@@ -6,7 +6,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # pnpm via corepack (version pinned by package.json "packageManager").
-RUN corepack enable
+# Node 26 no longer bundles corepack, so install it from npm first.
+RUN npm install -g corepack@latest && corepack enable
 
 WORKDIR /app
 
