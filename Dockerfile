@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22.23.2-bookworm-slim
 
 # ffmpeg does the WebM/Opus -> HLS/AAC muxing.
 RUN apt-get update \

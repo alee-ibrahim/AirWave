@@ -2,8 +2,8 @@
 # mise manages the toolchain (Node + pnpm) and the project tasks.
 # Install mise (https://mise.jdx.dev), then:  mise install  &&  mise run up
 [tools]
-node = "20"
-pnpm = "10"
+node = "22.23.2"
+pnpm = "11.24.0"
 
 [tasks.install]
 description = "Install dependencies (pnpm — shared global store)"
