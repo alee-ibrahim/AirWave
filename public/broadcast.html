@@ -183,19 +183,42 @@
     }
 
     // --- Live captions (free, via the browser's Web Speech API) --------
+    // NOTE: the transcript is produced by *this* (the broadcaster's) browser and
+    // only relayed to listeners. Chrome's engine works on desktop Chrome/Edge;
+    // mobile browsers can't run it reliably, so broadcast from a laptop/desktop.
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
     const ccStatus = document.getElementById("ccStatus");
     let recognition = null, ccActive = false;
+    let ccRestarts = 0, ccWindowStart = 0, ccGotResult = false;
+    function ccHint(err) {
+      switch (err) {
+        case "not-allowed":
+        case "service-not-allowed":
+          return " — mic blocked for this site. Click the 🔒 in the address bar → Microphone → Allow, then reload.";
+        case "audio-capture": return " — no microphone available.";
+        case "network":       return " — can't reach the speech service from this network.";
+        case "no-speech":     return " — no speech detected yet.";
+        default:              return "";
+      }
+    }
     function startCaptions() {
       if (!document.getElementById("ccChk").checked) return;
-      if (!SR) { ccStatus.textContent = "Captions: not supported in this browser — use Chrome or Edge."; return; }
+      if (!SR) { ccStatus.textContent = "Captions: not supported here — broadcast from desktop Chrome or Edge."; return; }
+      if (isMobile) { ccStatus.textContent = "Captions need a laptop/desktop broadcaster — mobile browsers can't run them."; return; }
+      ccActive = true; ccRestarts = 0; ccWindowStart = Date.now(); ccGotResult = false;
+      launchRecognition();
+    }
+    function launchRecognition() {
       try {
         recognition = new SR();
         recognition.lang = "en-US";
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.onstart = () => { ccStatus.textContent = "Captions: listening…"; };
+        // Don't clobber a sticky error message with "listening…" on each auto-restart.
+        recognition.onstart = () => { if (!/blocked|stopped|error/i.test(ccStatus.textContent)) ccStatus.textContent = "Captions: listening…"; };
         recognition.onresult = (e) => {
+          ccGotResult = true;
           let interim = "", final = "";
           for (let i = e.resultIndex; i < e.results.length; i++) {
             const t = e.results[i][0].transcript;
@@ -207,12 +230,28 @@
           else if (interim && ws?.readyState === 1) ws.send(JSON.stringify({ type: "caption", text: interim.trim(), final: false }));
         };
         recognition.onerror = (e) => {
-          ccStatus.textContent = "Captions error: " + e.error +
-            (e.error === "not-allowed" || e.error === "service-not-allowed" ? " (allow microphone / try Chrome)" :
-             e.error === "no-speech" ? " (no speech detected)" : "");
+          console.warn("[captions] error:", e.error, e.message || "");
+          recognition._err = e.error;
+          // Fatal errors: stop trying and show an actionable message (no restart loop).
+          if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+            ccActive = false;
+            ccStatus.textContent = "Captions blocked (" + e.error + ")" + ccHint(e.error);
+          }
         };
-        recognition.onend = () => { if (ccActive) { try { recognition.start(); } catch {} } };
-        ccActive = true;
+        recognition.onend = () => {
+          if (!ccActive) return;
+          // Rate-limit restarts: if it keeps ending without ever producing text,
+          // stop and surface the last error instead of spinning on "listening…".
+          const now = Date.now();
+          if (now - ccWindowStart > 10000) { ccWindowStart = now; ccRestarts = 0; }
+          if (++ccRestarts > 8 && !ccGotResult) {
+            ccActive = false;
+            ccStatus.textContent = "Captions stopped" + ccHint(recognition && recognition._err) +
+              " (engine restarted repeatedly without producing text — broadcast from desktop Chrome/Edge).";
+            return;
+          }
+          setTimeout(() => { if (ccActive) launchRecognition(); }, 400);
+        };
         recognition.start();
       } catch (err) { ccStatus.textContent = "Captions couldn't start: " + err.message; }
     }
